@@ -1,0 +1,374 @@
+assume cs:code, ds:data
+
+data segment
+intend 	dw 0,0 	;行，列
+ban 	dw 0	;存放球板位置
+brick	dw 0,0	;段，偏
+data ends
+code segment
+;中断例程
+int9:	push ax
+	push bx
+	push cx
+	push es
+
+	in al,60h
+
+	pushf				;调用原int 9
+	call dword ptr cs:[200h]	; (cs)=0
+;处理程序
+	mov bx,0b800h
+	mov es,bx
+
+	cmp al,48h			
+	jne to1
+	mov bx,-160			;移动指标
+	call int9g
+	jmp to4
+to1:	
+	cmp al,4bh			
+	jne to2
+	mov bx,-2
+	call int9g
+	jmp to4
+to2:	
+	cmp al,4dh			
+	jne to3
+	mov bx,2
+	call int9g
+	jmp to4
+to3:	
+	cmp al,50h			
+	jne to4
+	mov bx,160
+	call int9g
+to4:	
+	
+	
+	pop es
+	pop cx
+	pop bx
+	pop ax
+	iret
+
+int9g:	push cx		;dx指向最左元素,bx移动方向,cx球拍长
+	push si
+
+	mov si,ban[0]
+	mov cx,10
+clr9:	mov word ptr es:[si],0
+	add si,2
+	loop clr9
+	
+	
+	add ban[0],bx		;一直改变
+	mov si,ban[0]
+	mov bl,02h
+	mov bh,06h
+	mov cx,10
+newp:	mov es:[si],bx
+	add si,2
+	loop newp
+
+	pop si
+	pop cx
+	ret
+	
+int9end: nop
+;============================================================
+start:	
+;安装	
+	mov ax,0
+	mov es,ax
+
+	push cs
+	pop ds
+
+	mov di,204h
+	mov si,offset int9
+	mov cx,offset int9end-offset int9
+	cld
+	rep movsb
+
+;存储原int 9 的地址
+	push es:[9*4]
+	pop es:[200h]
+	push es:[9*4+2]
+	pop es:[202h]
+
+;设置向量表
+	cli				;保证不被打断
+	mov word ptr es:[9*4],204h
+	mov word ptr es:[9*4+2],00h
+	
+;功能	
+	mov dl,30			;列
+	mov dh,3			;行
+	call wall
+
+	mov dl,10			;列
+	mov dh,6			;行
+	call wall
+
+	mov dl,60			;列
+	mov dh,5			;行
+	call wall
+;球拍
+	mov bx,24*160+70
+	mov cx,10			;长10
+	call pat
+
+	mov ax,data
+	mov ds,ax
+	mov ban[0],bx			;为int9提供的参数
+	sti
+;开球==============================================================
+	call ball
+;=============返回原int 9 
+	push es:[200h]
+	pop es:[9*4]
+	push es:[202h]
+	pop es:[9*4+2]
+
+	mov ax,4c00h
+	int 21h
+;子程序 砖块	dl  ,dh========================================================
+wall:	push ax
+	push es
+	push dx
+	push di
+	push bx
+	push cx
+
+	mov ax,0b800h
+	mov es,ax
+	
+	mov ax,2
+	mul dl
+	mov di,ax
+	mov ax,160
+	mov dl,dh
+	mov dh,0
+	mul dx		;dx归0
+	add di,ax	;初始地址
+
+	mov ah,1	;蓝色砖块
+	mov al,'#'
+	mov cx,5
+wall_0:	push cx
+	mov bx,0
+	mov cx,5
+wall_1:	mov es:[di+bx],ax
+	add bx,2
+	loop wall_1
+	add di,160
+	pop cx
+	loop wall_0
+	
+	
+	pop cx
+	pop bx
+	pop di
+	pop dx
+	pop es
+	pop ax
+	ret	
+;球拍
+pat:		;bx,指向球拍最左头 cx,球拍长============================
+	push es
+	push ax
+	push bx
+	push cx
+	
+	mov ax,0b800h
+	mov es,ax
+	
+	mov al,02h
+	mov ah,06h		;黄色的拍
+	;mov cx,10		;球拍长
+pat_0:	mov es:[bx],ax
+	add bx,2
+	loop pat_0
+	
+	pop cx
+	pop bx
+	pop ax
+	pop es	
+	ret	
+;弹跳的球=====================================================
+ball:	push bx			;主程序
+	push si
+	push es
+	push ds
+	push bp
+	push di
+	push ax
+
+	mov ax,data
+	mov ds,ax
+	mov ax,0b800h
+	mov es,ax
+
+	mov al,1		;笑脸
+	mov ah,02h
+
+	mov bx,14*160		;行指标
+	mov si,2		;列指标
+
+	mov intend[0],-160	;初始向上
+	mov intend[2],2
+	cli	
+ball_0:	
+	
+	cmp bx,0			;边框反弹
+	ja next1
+	mov intend[0],160		;反向
+next1:	
+	cmp si,0
+	ja next22
+	mov intend[2],2
+next22:	
+	cmp si,158
+	jb next2
+	mov intend[2],-2
+next2:
+;碰砖块
+	mov brick[0],bx
+	mov brick[2],si
+
+	mov di,si
+	mov bp,bx
+	add di,intend[2]
+	cmp byte ptr es:[bx+di+1],01h 	;砖块
+	jne  next3		
+	call cer_1			;左右型,附带转向
+next3:		
+	mov di,si
+	mov bp,bx	
+	add bp,intend[0]
+	cmp byte ptr es:[bp+di+1],06h
+	jne nto_1
+	mov intend[0],-160
+nto_1:
+	cmp byte ptr es:[bp+di+1],01h
+	jne next4
+	call cer_2
+next4:	
+	mov es:[bx+si],ax
+	sti				;不被影响
+	call delay
+	cli
+	mov word ptr es:[bx+si],0	;清除
+	
+	add bx,intend[0]
+	add si,intend[2]
+	cmp bx,24*160
+	ja ok				;越底界，游戏结束
+	
+	jmp ball_0
+
+ok:		
+	pop ax
+	pop di
+	pop bp
+	pop ds
+	pop es
+	pop si
+	pop bx	
+	ret
+;==========================================================
+cer_1:		;左右	bp行,bi列,intend[2]代表朝向	es=0b800h
+	push cx
+	push si
+	push bp
+	push di
+
+	mov bp,brick[0]
+	mov di,brick[2]
+	add di,intend[2]
+
+c_lr0:	cmp word ptr es:[bp+di-160],0
+	je c1to1
+	sub bp,160
+	jmp c_lr0
+c1to1:	
+	mov cx,5
+clr_1:	push cx
+	mov si,di
+
+	mov cx,5
+c_lr2:	mov word ptr es:[bp+si],0
+	add si,intend[2]
+	loop c_lr2
+	add bp,160
+	
+	pop cx
+	loop clr_1
+	
+	cmp intend[2],0
+	ja c1to2
+	mov intend[2],2
+	jmp c1ok
+c1to2:	mov intend[2],-2
+
+c1ok:	pop di
+	pop bp
+	pop si
+	pop cx
+	ret
+;=================================================================
+cer_2:		;上下
+	push cx
+	push si
+	push bp
+	push di
+
+	mov bp,brick[0]
+	mov di,brick[2]
+	add bp,intend[0]
+
+c_up0:	cmp word ptr es:[bp+di-2],0
+	je c2to1
+	sub di,2
+	jmp c_up0
+c2to1:	
+	mov cx,6
+c_up1:	push cx
+
+	mov si,di
+	mov cx,6
+c_up2:	mov word ptr es:[bp+si],0
+	add si,2
+	loop c_up2
+	add bp,intend[0]
+	
+	pop cx
+	loop c_up1
+
+	cmp intend[0],0
+	ja c2to2
+	mov intend[0],160
+	jmp c2ok
+c2to2:	mov intend[0],-160
+
+c2ok:	pop di
+	pop bp
+	pop si
+	pop cx
+	ret
+;================================================================
+delay:
+	push cx
+	push dx
+	mov cx,0ffh  ;注意：改变此cx值可改变延时的时间长短
+yanshi0:push cx
+     	mov cx,06ffh
+yanshi1:sub dx,dx
+     	loop yanshi1
+     	pop cx
+     	loop yanshi0
+	pop dx
+	pop cx
+	ret
+code ends
+end start
