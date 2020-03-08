@@ -1,0 +1,505 @@
+assume cs:code
+code segment
+dox:	mov ax,7c00h
+	push ax
+	mov ax,offset doxok
+	push ax
+	retf				;修改cs=7c00h,
+
+doxok:	jmp doxbegin
+one	db '(1)reset pc',0
+two	db '(2)start system',0
+three	db '(3)clock',0
+four	db '(4)set clock',0
+messege	db 'please input follow:year/month/day hour:minute:second',0
+list 	dw one,two,three,four,timelist,data,messege
+table	dw sub1,sub2,sub3,sub4
+renew	dw 0000,0ffffh
+initita dw 7e00h,0000h			;存放2号功能原系统储存地址
+sub3flat	db 0,0			;3号功能存放esc,f1, 标识
+data 	dw 80 dup (0)			;为输入字符串设立的存储空间
+doxbegin:		;cs=7c00,ip=00
+;加载其余2个扇区
+	mov ax,7c00h
+	mov es,ax
+	mov bx,512
+	mov al,2		;3扇区
+	mov ch,0
+	mov cl,0
+	mov dh,0
+	mov dl,0
+	mov ah,2		;读取
+	int 13h 	
+
+;显示	
+	mov ax,cs
+	mov ds,ax
+			;ds=7c00
+			;si
+	mov cx,4
+	mov di,0
+	mov dh,10
+	mov dl,36
+all0:	push cx
+	mov si,list[di]
+	mov cl,02h				;绿色
+	call show_str				;显示字符串
+	inc dh
+	add di,2
+	mov si,7c00h
+	
+	pop cx
+	loop all0
+;
+	mov ah,0	;读取用户选择
+	int 16h
+;判断输入，选取功能
+		
+	sub al,31h	;ASCII 1234>>>>0123
+	add al,al
+	mov ah,0
+	mov bx,ax
+	call word ptr table[bx]		
+;功能1============================================================
+sub1:	mov ax,7c00h
+	mov ds,ax
+	jmp dword ptr ds:renew[0]	;跳转至ffff:0,重启
+;功能2============================================================**********
+sub2:	mov ax,0
+	mov es,ax
+	mov ax,7c00h	;为下方ds
+	mov ds,ax
+	mov bx,7e00h	;防止覆盖，退1kb内存
+
+	mov dh,0
+	mov dl,80h	;硬盘c	
+	mov cl,0
+	mov ch,0
+	mov al,1
+	mov ah,2
+	int 13h	
+
+	jmp dword ptr ds:initita[0]	;跳转至 0000：7e00h	执行原C盘操作系统	
+;功能3===================================================================
+sub3:	
+;安装9号中断
+	cli
+	mov ax,0
+	mov es,ax			;	目标段地址
+
+	push cs
+	pop ds
+
+	mov di,204h
+	mov si,offset int9
+	mov cx,offset int9end-offset int9
+	cld
+	rep movsb
+
+;存储原int 9 的地址
+	push es:[9*4]
+	pop es:[200h]
+	push es:[9*4+2]
+	pop es:[202h]
+
+;设置向量表
+					;保证不被打断
+	mov word ptr es:[9*4],204h
+	mov word ptr es:[9*4+2],00h
+	sti
+;清屏
+	call clean
+;功能====循环显示时间
+
+
+	mov si,7c00h
+	mov sub3flat[0],0	;清空
+sub3_s0:
+	
+	call nowtime			;中断跳出
+	cmp sub3flat[0],0	;cs=7c00	
+	jne sub3_ok
+
+	jmp sub3_s0
+;返回原int 9
+sub3_ok:	
+	push es:[200h]
+	pop es:[9*4]
+	push es:[202h]
+	pop es:[9*4+2]
+;跳回主菜单
+	mov bx,00h
+	jmp bx			;cs=7c00	
+	
+;中断例程*****************************************************
+int9:	push ax
+	push bx
+	push cx
+	push es
+
+	in al,60h
+
+	pushf				;调用原int 9
+	call dword ptr cs:[200h]	; (cs)=0	
+;处理程序
+	cmp al,01h			;  Esc的扫描码
+	je int9esc
+	cmp al,3bh			;f1的扫描码
+	je int9f1
+	jmp int9ret
+
+int9esc:	;返回主选单
+	mov ax,7c00h
+	mov es,ax
+	mov byte ptr es:sub3flat[0],1	;传递标识		
+	
+	jmp int9ret
+int9f1:			;修改颜色
+	mov ax,7c00h
+	mov es,ax	
+	add byte ptr es:sub3flat[1],1	;改变颜色
+	
+	
+int9ret:pop es
+	pop cx
+	pop bx
+	pop ax
+	iret
+	
+int9end: nop
+;**************************************
+;功能4===============================================================================
+sub4:	
+	call clean 			;清屏
+
+	mov ax,7c00h
+	mov ds,ax
+	mov si,list[12]			;提示输入字符串,得地址
+	mov dh,9			;显示位置
+	mov dl,10
+	mov cl,04h
+	call show_str
+
+	mov si,list[10]			;data偏移地址
+	mov dh,10			;显示位置
+	mov dl,10			;
+	call getstr
+;读取字符,修改时间
+	mov si,list[10]			;data的初始地址	
+	mov dl,9
+	mov cx,3	
+sub4_1:				;;写入年月日
+	mov al,dl
+	out 70h,al
+	mov ax,ds:[si]
+	call bcd
+	out 71h,al
+	add si,3
+	sub dl,1
+	loop sub4_1
+	
+	mov dl,4
+	mov cx,3
+sub4_2:				;写入时分秒
+	mov al,dl
+	out 70h,al
+	mov ax,ds:[si]
+	call bcd
+	out 71h,al
+	add si,3
+	sub dl,2
+	loop sub4_2
+	
+	mov bx,0
+	jmp bx		;	跳回cs=7c00,ip=0:
+;************************************************************************
+;将一个字型数据修改为BCD码,以ax传参，al返还
+bcd:	push cx
+
+	sub ah,30h
+	sub al,30h
+	and al,00001111b
+	mov cl,4
+	shl ah,cl
+	and ah,11110000b
+	add al,ah		;生成BCD值
+
+	pop cx
+	ret
+;字符串输入子程序		;ds:si指向字符储存空间,以0为结尾==============================
+getstr:	push ax
+
+getstrs:mov ah,0
+	int 16h
+	cmp al,20h
+	jb nochar		;非字符
+	mov ah,0
+	call charstack		;字符入栈
+	mov ah,2
+	call charstack		;显示栈中元素
+	jmp getstrs
+
+nochar:	cmp ah,0eh		;删除
+	je backspace
+	cmp ah,1ch		;Enter
+	je enter
+	jmp getstrs
+
+backspace:
+	mov ah,1
+	call charstack		;字符出栈
+	mov ah,2
+	call charstack		;显示栈中元素
+	jmp getstrs
+
+enter:	mov al,0
+	mov ah,0
+	call charstack		;0入栈
+	mov ah,2
+	call charstack		;显示栈中元素
+	pop ax
+	ret
+;===========================charstack================
+;字符入栈，出栈，显示
+;ah 功能 0,1,2
+;ds:si 指向字符栈空间
+;0>>>>al 入栈字符；1》》》》》》al返回字符； 2 dh>>,dl>>表示行列
+			
+charstack:	jmp short charstart
+
+chartable	dw charpush,charpop,charshow		;cs=7c00h,ip=0
+top		dw 0				;栈顶
+
+charstart:	
+	push bx
+	push dx
+	push di
+	push es
+
+	cmp ah,2
+	ja sret
+	mov bl,ah
+	mov bh,0
+	add bx,bx
+	jmp word ptr chartable[bx]
+
+charpush:
+	mov bx,top
+	mov [si+bx],al
+	inc top
+	jmp sret
+
+charpop:
+	cmp top,0
+	je sret
+	dec top
+	mov bx,top
+	mov al,[si+bx]
+	jmp sret
+
+charshow:
+	mov bx,0b800h
+	mov es,bx
+	mov al,160
+	mov ah,0
+	mul dh
+	mov di,ax
+	add dl,dl
+	mov dh,0
+	add di,dx
+
+	mov bx,0
+
+charshows:
+	cmp bx,top
+	jne noempty
+	mov byte ptr es:[di],' '
+	jmp sret
+noempty:mov al,[si][bx]
+	mov es:[di],al
+	mov byte ptr es:[di+2],' '
+	inc bx
+	add di,2
+	jmp charshows
+
+
+sret:	pop es
+	pop di
+	pop dx
+	pop bx
+	ret
+;清屏==================================================================
+clean:	push bx
+	push es
+	push cx
+
+	mov bx,0b800h
+	mov es,bx
+	mov bx,0
+	mov cx,2000
+clean_0:
+	mov word ptr es:[bx],0
+	add bx,2
+	loop clean_0
+
+	pop cx
+	pop es
+	pop bx
+	ret
+;子程序	字符显示=======================================================
+show_str:	;参 行dh，列dl,颜色cl,ds:[si]指向字符串
+	push ax
+	push es
+	push di
+	push bx
+	push cx
+
+	mov ax,0b800h
+	mov es,ax
+	mov di,0
+	mov al,2
+	mov ah,0
+	mul dl
+	add di,ax	;得到显存内初始地址
+	mov ax,160
+	mov bl,dh
+	mov bh,0	;
+	mul bx
+	add di,ax
+	
+	
+	mov ah,cl	;颜色设置
+str0:	mov al,ds:[si]
+	mov es:[di],ax
+	inc si		;正向
+	add di,2
+;判断结束标识
+	mov cl,ds:[si]
+	mov ch,0
+	jcxz str_p
+	mov cx,2
+	jmp str
+str_p:	mov cx,1
+	
+str:
+	
+	loop str0
+	
+	pop cx
+	pop bx
+	pop di
+	pop es
+	pop ax
+	ret
+;子程序 显示时间===============================================
+nowtime: 	jmp timebegin
+timelist	db 32 dup (0)
+
+timebegin:
+	push ax
+	push es
+	push ds
+	push si
+	push di
+	push dx
+	push cx
+
+	mov ax,0b800h
+	mov es,ax
+	mov ax,7c00h		;初始偏移
+	mov ds,ax
+	mov si,list[8]		;timelist 的偏移
+
+	mov dl,9
+	mov cx,3
+times0:	push cx
+	mov al,dl
+	out 70h,al
+	in al,71h
+
+	mov ah,al
+	mov cl,4
+	shr ah,cl
+	and al,00001111b
+
+	add ah,30h
+	add al,30h
+	mov ds:[si],ah
+	mov ds:[si+1],al
+	mov byte ptr ds:[si+2],'/'
+	add si,3
+	sub dl,1
+
+	pop cx
+	loop times0
+	mov byte ptr ds:[si-1],' '
+	inc si
+
+;时分秒
+	mov dl,4
+	mov cx,3
+times1:	push cx
+	mov al,dl
+	out 70h,al
+	in al,71h
+
+	mov ah,al
+	mov cl,4
+	shr ah,cl
+	and al,00001111b
+
+	add ah,30h
+	add al,30h
+	mov ds:[si],ah
+	mov ds:[si+1],al
+	mov byte ptr ds:[si+2],':'
+	add si,3
+	sub dl,2
+
+	pop cx
+	loop times1
+	mov byte ptr ds:[si-1],' '
+;显示
+	mov si,list[8]			;修改为timelist
+	mov di,160*12+64
+	mov ah,ds:sub3flat[1]		;颜色设置
+	mov cx,32
+times3:	mov al,ds:[si]			;ds=7c00h	
+	mov es:[di],ax
+	add di,2
+	inc si
+	loop times3
+
+	pop cx
+	pop dx
+	pop di
+	pop si
+	pop ds
+	pop es
+	pop ax
+	ret	
+
+doxend: nop
+;主程序===================================================
+start:	
+;安装	
+	
+	mov bx,offset dox
+	mov ax,cs
+	mov es,ax
+	mov al,3		;3扇区
+	mov ch,0
+	mov cl,0
+	mov dh,0
+	mov dl,0
+	mov ah,3
+	int 13h 	;写入
+
+	
+
+;返回	
+	mov ax,4c00h
+	int 21h
+
+code ends
+end start
