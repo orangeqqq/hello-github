@@ -6,5 +6,4 @@
 - windows系统开机启动程序改写
 
 ## c
-- 计算器calculator.c，运行需要头文件list.h.
-
+- 计算器calculator.c，运行需要头文件list.h.可处理包含+-\*/及（）的字符串表达式。
